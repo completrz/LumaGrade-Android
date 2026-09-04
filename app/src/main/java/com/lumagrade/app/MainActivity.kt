@@ -38,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -111,6 +112,22 @@ private fun LumaGradeApp(viewModel: EditorViewModel) {
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/jpeg")) { uri ->
         uri?.let { viewModel.exportPhoto(context, it) }
     }
+    val presetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        viewModel.importPresets(context, uris)
+    }
+    val openPresetPicker = {
+        presetPicker.launch(
+            arrayOf(
+                "application/xml",
+                "text/xml",
+                "application/json",
+                "application/zip",
+                "application/x-zip-compressed",
+                "application/octet-stream",
+                "text/plain",
+            ),
+        )
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let {
@@ -131,7 +148,10 @@ private fun LumaGradeApp(viewModel: EditorViewModel) {
             if (state.originalPreview == null) {
                 WelcomeScreen(
                     isLoading = state.isLoading,
+                    isImportingPresets = state.isImportingPresets,
+                    importedPresetCount = state.importedPresets.size,
                     onOpenPhoto = { photoPicker.launch(arrayOf("image/*")) },
+                    onImportPresets = openPresetPicker,
                 )
             } else {
                 EditorScreen(
@@ -147,6 +167,8 @@ private fun LumaGradeApp(viewModel: EditorViewModel) {
                     onPresetSelected = viewModel::selectPreset,
                     onIntensityChange = viewModel::setPresetIntensity,
                     onAdjustmentsChange = viewModel::setAdjustments,
+                    onImportPresets = openPresetPicker,
+                    onRemoveImportedPreset = viewModel::removeImportedPreset,
                 )
             }
 
@@ -160,7 +182,10 @@ private fun LumaGradeApp(viewModel: EditorViewModel) {
 @Composable
 private fun WelcomeScreen(
     isLoading: Boolean,
+    isImportingPresets: Boolean,
+    importedPresetCount: Int,
     onOpenPhoto: () -> Unit,
+    onImportPresets: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -227,6 +252,23 @@ private fun WelcomeScreen(
                     Text("Choose a photo", fontWeight = FontWeight.Bold)
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onImportPresets,
+                enabled = !isImportingPresets,
+                modifier = Modifier.height(48.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                if (isImportingPresets) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Acid, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(9.dp))
+                }
+                Text(
+                    if (importedPresetCount > 0) "Import presets ($importedPresetCount saved)"
+                    else "Import ZIP, XMP, or JSON presets",
+                )
+            }
         }
 
         Text(
@@ -250,6 +292,8 @@ private fun EditorScreen(
     onPresetSelected: (PhotoPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
     onAdjustmentsChange: (Adjustments) -> Unit,
+    onImportPresets: () -> Unit,
+    onRemoveImportedPreset: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         EditorTopBar(
@@ -266,6 +310,8 @@ private fun EditorScreen(
             onPresetSelected = onPresetSelected,
             onIntensityChange = onIntensityChange,
             onAdjustmentsChange = onAdjustmentsChange,
+            onImportPresets = onImportPresets,
+            onRemoveImportedPreset = onRemoveImportedPreset,
         )
     }
 }
@@ -388,6 +434,8 @@ private fun EditTray(
     onPresetSelected: (PhotoPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
     onAdjustmentsChange: (Adjustments) -> Unit,
+    onImportPresets: () -> Unit,
+    onRemoveImportedPreset: (String) -> Unit,
 ) {
     Surface(
         modifier = Modifier
@@ -405,8 +453,12 @@ private fun EditTray(
                     selectedId = state.selectedPresetId,
                     intensity = state.presetIntensity,
                     previews = state.presetPreviews,
+                    presets = PresetCatalog.presets + state.importedPresets,
+                    isImporting = state.isImportingPresets,
                     onPresetSelected = onPresetSelected,
                     onIntensityChange = onIntensityChange,
+                    onImportPresets = onImportPresets,
+                    onRemoveImportedPreset = onRemoveImportedPreset,
                 )
                 EditorPanel.Light -> LightControls(state.adjustments, onAdjustmentsChange)
                 EditorPanel.Color -> ColorControls(state.adjustments, onAdjustmentsChange)
@@ -458,9 +510,14 @@ private fun PresetPanel(
     selectedId: String,
     intensity: Float,
     previews: Map<String, android.graphics.Bitmap>,
+    presets: List<PhotoPreset>,
+    isImporting: Boolean,
     onPresetSelected: (PhotoPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
+    onImportPresets: () -> Unit,
+    onRemoveImportedPreset: (String) -> Unit,
 ) {
+    val selectedImported = presets.firstOrNull { it.id == selectedId && it.collection == "Imported" }
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -479,11 +536,48 @@ private fun PresetPanel(
             )
             Text("${(intensity * 100).toInt()}", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
         }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (isImporting) "Importing…" else "+ Import ZIP / XMP",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SoftPanel)
+                    .clickable(enabled = !isImporting, onClick = onImportPresets)
+                    .padding(horizontal = 11.dp, vertical = 7.dp),
+                color = Acid,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "${presets.count { it.collection == "Imported" }} imported",
+                color = Muted,
+                fontSize = 11.sp,
+            )
+            selectedImported?.let { preset ->
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "Remove",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onRemoveImportedPreset(preset.id) }
+                        .padding(horizontal = 7.dp, vertical = 5.dp),
+                    color = Color(0xFFFF8585),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(PresetCatalog.presets, key = { it.id }) { preset ->
+            items(presets, key = { it.id }) { preset ->
                 PresetCard(
                     preset = preset,
                     preview = previews[preset.id],

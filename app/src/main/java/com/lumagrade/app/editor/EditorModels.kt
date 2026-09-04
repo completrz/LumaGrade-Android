@@ -1,5 +1,10 @@
 package com.lumagrade.app.editor
 
+data class CurvePoint(
+    val input: Float,
+    val output: Float,
+)
+
 data class Adjustments(
     val exposure: Float = 0f,
     val contrast: Float = 0f,
@@ -19,6 +24,10 @@ data class Adjustments(
     val shadowTone: Float = 0f,
     val highlightHue: Float = 42f,
     val highlightTone: Float = 0f,
+    val toneCurve: List<CurvePoint> = emptyList(),
+    val hueMix: List<Float> = List(8) { 0f },
+    val saturationMix: List<Float> = List(8) { 0f },
+    val luminanceMix: List<Float> = List(8) { 0f },
 )
 
 data class PhotoPreset(

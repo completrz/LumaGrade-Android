@@ -30,6 +30,13 @@ object ImageProcessor {
         val contrastGain = 1f + adjustments.contrast * 1.45f
         val shadowTint = hueToRgb(adjustments.shadowHue)
         val highlightTint = hueToRgb(adjustments.highlightHue)
+        val toneCurve = buildToneCurveLut(adjustments.toneCurve)
+        val hueAdjustment = buildColorMixLut(adjustments.hueMix)
+        val saturationAdjustment = buildColorMixLut(adjustments.saturationMix)
+        val luminanceAdjustment = buildColorMixLut(adjustments.luminanceMix)
+        val hasColorMix = adjustments.hueMix.any { it != 0f } ||
+            adjustments.saturationMix.any { it != 0f } ||
+            adjustments.luminanceMix.any { it != 0f }
         val cx = (width - 1) / 2f
         val cy = (height - 1) / 2f
         val maxDistance = max(1f, kotlin.math.sqrt(cx * cx + cy * cy))
@@ -67,6 +74,15 @@ object ImageProcessor {
                 g = 0.5f + (g - 0.5f) * contrastGain
                 b = 0.5f + (b - 0.5f) * contrastGain
 
+                if (toneCurve != null) {
+                    val beforeCurve = luma(r, g, b).coerceIn(0f, 1f)
+                    val mapped = toneCurve[(beforeCurve * 255f).toInt().coerceIn(0, 255)]
+                    val curveShift = mapped - beforeCurve
+                    r += curveShift
+                    g += curveShift
+                    b += curveShift
+                }
+
                 val warmth = adjustments.temperature
                 r += warmth * 0.115f * (1.1f - clamp01(r) * 0.25f)
                 g += warmth * 0.018f
@@ -76,6 +92,45 @@ object ImageProcessor {
                 r += tint * 0.052f
                 g -= tint * 0.095f
                 b += tint * 0.052f
+
+                if (hasColorMix) {
+                    val maxChannel = max(r, max(g, b))
+                    val minChannel = min(r, min(g, b))
+                    val delta = maxChannel - minChannel
+                    var lightness = (maxChannel + minChannel) / 2f
+                    var hue = when {
+                        delta < 0.0001f -> 0f
+                        maxChannel == r -> 60f * (((g - b) / delta) % 6f)
+                        maxChannel == g -> 60f * (((b - r) / delta) + 2f)
+                        else -> 60f * (((r - g) / delta) + 4f)
+                    }
+                    if (hue < 0f) hue += 360f
+                    val lookup = hue.toInt().coerceIn(0, 359)
+                    hue = (hue + hueAdjustment[lookup] * 30f + 360f) % 360f
+                    val baseSaturation = if (delta < 0.0001f) {
+                        0f
+                    } else {
+                        delta / (1f - abs(2f * lightness - 1f)).coerceAtLeast(0.0001f)
+                    }
+                    val mixedSaturation = (baseSaturation * (1f + saturationAdjustment[lookup])).coerceIn(0f, 1f)
+                    lightness = (lightness + luminanceAdjustment[lookup] * 0.22f).coerceIn(0f, 1f)
+                    if (mixedSaturation < 0.0001f) {
+                        r = lightness
+                        g = lightness
+                        b = lightness
+                    } else {
+                        val q = if (lightness < 0.5f) {
+                            lightness * (1f + mixedSaturation)
+                        } else {
+                            lightness + mixedSaturation - lightness * mixedSaturation
+                        }
+                        val p = 2f * lightness - q
+                        val normalizedHue = hue / 360f
+                        r = hueChannel(p, q, normalizedHue + 1f / 3f)
+                        g = hueChannel(p, q, normalizedHue)
+                        b = hueChannel(p, q, normalizedHue - 1f / 3f)
+                    }
+                }
 
                 luminance = luma(r, g, b).coerceIn(0f, 1f)
                 val shadowGrade = adjustments.shadowTone * (1f - luminance).pow(2) * 0.72f
@@ -194,6 +249,56 @@ object ImageProcessor {
     private fun sharpenValue(center: Int, left: Int, right: Int, up: Int, down: Int, strength: Float): Int {
         val neighbors = (left + right + up + down) / 4f
         return (center + (center - neighbors) * strength).toInt().coerceIn(0, 255)
+    }
+
+    private fun buildToneCurveLut(points: List<CurvePoint>): FloatArray? {
+        if (points.size < 2) return null
+        val sorted = points
+            .map { CurvePoint(it.input.coerceIn(0f, 1f), it.output.coerceIn(0f, 1f)) }
+            .distinctBy { it.input }
+            .sortedBy { it.input }
+        if (sorted.size < 2) return null
+        return FloatArray(256) { index ->
+            val input = index / 255f
+            val rightIndex = sorted.indexOfFirst { it.input >= input }.let { if (it < 0) sorted.lastIndex else it }
+            val right = sorted[rightIndex]
+            val left = sorted[(rightIndex - 1).coerceAtLeast(0)]
+            if (right.input == left.input) {
+                right.output
+            } else {
+                val amount = (input - left.input) / (right.input - left.input)
+                lerp(left.output, right.output, amount)
+            }
+        }
+    }
+
+    private fun buildColorMixLut(values: List<Float>): FloatArray {
+        val normalized = FloatArray(8) { index -> values.getOrNull(index)?.coerceIn(-1f, 1f) ?: 0f }
+        val centers = floatArrayOf(0f, 30f, 60f, 120f, 180f, 240f, 280f, 320f)
+        return FloatArray(360) { hue ->
+            var weighted = 0f
+            var total = 0f
+            for (index in centers.indices) {
+                val rawDistance = abs(hue - centers[index])
+                val distance = min(rawDistance, 360f - rawDistance)
+                val weight = (1f - distance / 48f).coerceAtLeast(0f)
+                weighted += normalized[index] * weight
+                total += weight
+            }
+            if (total > 0f) weighted / total else 0f
+        }
+    }
+
+    private fun hueChannel(p: Float, q: Float, rawHue: Float): Float {
+        var hue = rawHue
+        if (hue < 0f) hue += 1f
+        if (hue > 1f) hue -= 1f
+        return when {
+            hue < 1f / 6f -> p + (q - p) * 6f * hue
+            hue < 1f / 2f -> q
+            hue < 2f / 3f -> p + (q - p) * (2f / 3f - hue) * 6f
+            else -> p
+        }
     }
 
     private fun luma(r: Float, g: Float, b: Float): Float = r * 0.2126f + g * 0.7152f + b * 0.0722f

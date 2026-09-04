@@ -6,6 +6,8 @@ LumaGrade is a native, offline Android photo editor inspired by the fast preset 
 
 - Import JPG, PNG, HEIC, and other formats supported by Android's image decoder
 - 16 handcrafted presets for portraits, film, night, nature, cinematic color, and black-and-white
+- Import complete ZIP packs, individual Lightroom/Camera Raw `.xmp` files, or LumaGrade `.json` packs
+- Imported presets are stored on the phone and get live thumbnails from the current photo
 - Adjustable preset strength
 - Light controls: exposure, contrast, highlights, shadows, whites, and blacks
 - Color controls: temperature, tint, vibrance, and saturation
@@ -37,6 +39,34 @@ If you push this folder to GitHub, the included workflow builds the APK automati
 Presets are combinations of real adjustment parameters, not transparent color overlays. The pipeline applies exposure, luminance-masked highlight/shadow recovery, black/white shaping, contrast, white balance, split toning, saturation, vibrance, fade, vignette, grain, and an unsharp pass. Preset intensity blends the fully graded result with the source image.
 
 Add or tune looks in `app/src/main/java/com/lumagrade/app/editor/PresetCatalog.kt`.
+
+## Import downloaded presets
+
+1. Download a preset pack to the phone. Leave it zipped, or extract its `.xmp` files.
+2. In LumaGrade, tap **Import ZIP / XMP** in the Presets tab. You can also import before opening a photo.
+3. Select one ZIP or up to 50 XMP/JSON files. Imported looks appear after the built-in presets and remain after restarting the app.
+4. Select an imported preset and tap **Remove** if you no longer want it.
+
+The importer translates global exposure and tone settings, master tone curves, the eight-channel color mixer, white balance, split toning/color grading, vignette, grain, clarity, and sharpening. Adobe camera profiles, LUT profiles, local masks, lens corrections, and AI settings are proprietary or engine-specific and are ignored. For that reason, a complex XMP preset can look somewhat different from Lightroom. Legacy `.lrtemplate` and DNG-based mobile presets are not supported; download the XMP version when one is offered.
+
+For native JSON packs, use normalized values from `-1.0` to `1.0` for signed controls and `0.0` to `1.0` for effects:
+
+```json
+{
+  "presets": [
+    {
+      "name": "My Warm Film",
+      "adjustments": {
+        "contrast": -0.08,
+        "temperature": 0.14,
+        "vibrance": 0.10,
+        "fade": 0.12,
+        "grain": 0.16
+      }
+    }
+  ]
+}
+```
 
 ## Honest limitations
 

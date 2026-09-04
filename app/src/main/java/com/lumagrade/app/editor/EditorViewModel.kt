@@ -1,11 +1,12 @@
 package com.lumagrade.app.editor
 
+import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.provider.OpenableColumns
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +25,7 @@ data class EditorUiState(
     val originalPreview: Bitmap? = null,
     val editedPreview: Bitmap? = null,
     val presetPreviews: Map<String, Bitmap> = emptyMap(),
+    val importedPresets: List<PhotoPreset> = emptyList(),
     val photoName: String = "Photo",
     val selectedPresetId: String = "original",
     val adjustments: Adjustments = Adjustments(),
@@ -32,11 +34,14 @@ data class EditorUiState(
     val isLoading: Boolean = false,
     val isRendering: Boolean = false,
     val isExporting: Boolean = false,
+    val isImportingPresets: Boolean = false,
     val message: String? = null,
 )
 
-class EditorViewModel : ViewModel() {
-    private val _state = MutableStateFlow(EditorUiState())
+class EditorViewModel(application: Application) : AndroidViewModel(application) {
+    private val _state = MutableStateFlow(
+        EditorUiState(importedPresets = ImportedPresetStore.load(application)),
+    )
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
 
     private var fullSizeSource: Bitmap? = null
@@ -53,6 +58,7 @@ class EditorViewModel : ViewModel() {
             runCatching {
                 withContext(Dispatchers.IO) { decode(context, uri, MAX_EXPORT_EDGE) }
             }.onSuccess { fullBitmap ->
+                val importedPresets = _state.value.importedPresets
                 fullSizeSource = fullBitmap
                 val previewBitmap = makePreview(fullBitmap, MAX_PREVIEW_EDGE)
                 previewSource = previewBitmap
@@ -60,6 +66,7 @@ class EditorViewModel : ViewModel() {
                     originalPreview = previewBitmap,
                     editedPreview = previewBitmap,
                     photoName = displayName(context, uri),
+                    importedPresets = importedPresets,
                 )
                 renderPreview(immediate = true)
                 generatePresetPreviews(previewBitmap)
@@ -80,7 +87,7 @@ class EditorViewModel : ViewModel() {
         renderGeneration++
         fullSizeSource = null
         previewSource = null
-        _state.value = EditorUiState()
+        _state.value = EditorUiState(importedPresets = _state.value.importedPresets)
     }
 
     fun selectPreset(preset: PhotoPreset) {
@@ -117,6 +124,60 @@ class EditorViewModel : ViewModel() {
 
     fun resetEdits() {
         selectPreset(PresetCatalog.byId("original"))
+    }
+
+    fun importPresets(context: Context, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        _state.update { it.copy(isImportingPresets = true, message = null) }
+        viewModelScope.launch {
+            val imported = mutableListOf<PhotoPreset>()
+            val failures = mutableListOf<String>()
+            withContext(Dispatchers.IO) {
+                uris.take(MAX_IMPORT_FILES).forEach { uri ->
+                    runCatching { PresetImporter.parse(context, uri) }
+                        .onSuccess { imported.addAll(it) }
+                        .onFailure { failures += it.message ?: "Unsupported preset" }
+                }
+            }
+
+            if (imported.isNotEmpty()) {
+                val merged = (imported + _state.value.importedPresets)
+                    .distinctBy { it.id }
+                    .take(MAX_SAVED_PRESETS)
+                ImportedPresetStore.save(getApplication<Application>(), merged)
+                val suffix = if (failures.isEmpty()) "" else "; ${failures.size} could not be read"
+                _state.update {
+                    it.copy(
+                        importedPresets = merged,
+                        isImportingPresets = false,
+                        message = "Imported ${imported.size} preset${if (imported.size == 1) "" else "s"}$suffix",
+                    )
+                }
+                previewSource?.let(::generatePresetPreviews)
+            } else {
+                _state.update {
+                    it.copy(
+                        isImportingPresets = false,
+                        message = failures.firstOrNull() ?: "No compatible presets were selected",
+                    )
+                }
+            }
+        }
+    }
+
+    fun removeImportedPreset(id: String) {
+        val current = _state.value
+        val remaining = current.importedPresets.filterNot { it.id == id }
+        if (remaining.size == current.importedPresets.size) return
+        ImportedPresetStore.save(getApplication<Application>(), remaining)
+        _state.update {
+            it.copy(
+                importedPresets = remaining,
+                presetPreviews = it.presetPreviews - id,
+                message = "Imported preset removed",
+            )
+        }
+        if (current.selectedPresetId == id) resetEdits()
     }
 
     fun exportPhoto(context: Context, destination: Uri) {
@@ -189,7 +250,8 @@ class EditorViewModel : ViewModel() {
         val thumbnail = makePreview(source, PRESET_PREVIEW_EDGE)
         thumbnailJob = viewModelScope.launch {
             val previews = linkedMapOf<String, Bitmap>()
-            for (preset in PresetCatalog.presets) {
+            val allPresets = PresetCatalog.presets + _state.value.importedPresets
+            for (preset in allPresets) {
                 val result = withContext(Dispatchers.Default) {
                     ImageProcessor.apply(thumbnail, preset.adjustments, 1f)
                 }
@@ -245,5 +307,7 @@ class EditorViewModel : ViewModel() {
         const val MAX_PREVIEW_EDGE = 1400
         const val MAX_EXPORT_EDGE = 3072
         const val PRESET_PREVIEW_EDGE = 180
+        const val MAX_IMPORT_FILES = 50
+        const val MAX_SAVED_PRESETS = 100
     }
 }
