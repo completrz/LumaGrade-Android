@@ -11,7 +11,7 @@ LumaGrade is a native, offline Android photo editor inspired by the fast preset 
 - Adjustable preset strength
 - Light controls: exposure, contrast, highlights, shadows, whites, and blacks
 - Color controls: temperature, tint, vibrance, and saturation
-- Effects: fade, vignette, deterministic film grain, and sharpening
+- Effects: fade, vignette, deterministic film grain, sharpening, and directional pixel stretching
 - Press-and-hold before/after comparison
 - High-quality JPEG export at 96% quality
 - Completely on-device; no account, analytics, or storage permission
@@ -48,6 +48,10 @@ Add or tune looks in `app/src/main/java/com/lumagrade/app/editor/PresetCatalog.k
 4. Select an imported preset and tap **Remove** if you no longer want it.
 
 The importer translates global exposure and tone settings, master tone curves, the eight-channel color mixer, white balance, split toning/color grading, vignette, grain, clarity, and sharpening. Adobe camera profiles, LUT profiles, local masks, lens corrections, and AI settings are proprietary or engine-specific and are ignored. For that reason, a complex XMP preset can look somewhat different from Lightroom. Legacy `.lrtemplate` and DNG-based mobile presets are not supported; download the XMP version when one is offered.
+
+## Pixel stretching
+
+Open **Effects**, raise **Pixel stretch**, then move **Source position** to choose the row or column sampled from the photo. **Source band** controls how much of the original image is expanded. Choose **Horizontal** to stretch a vertical band sideways or **Vertical** to stretch a horizontal band up and down. Setting Pixel stretch back to zero disables the effect.
 
 For native JSON packs, use normalized values from `-1.0` to `1.0` for signed controls and `0.0` to `1.0` for effects:
 
